@@ -5,7 +5,8 @@ import openai
 import whisper
 from moviepy.editor import VideoFileClip
 import tempfile
-import os
+
+from transformers import BartForConditionalGeneration, BartTokenizer
 
 discussion_file = "discussion_points.txt"
 
@@ -67,8 +68,11 @@ if not discussion_points:
     st.write("No discussion points added yet.")
 
 
-# Load the Whisper model
+# Load the llm models
 model = whisper.load_model("base")
+
+summarizer_model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
+summarizer_tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
 
 # Function to extract audio from video
 def extract_audio_from_video(video_file_path):
@@ -107,3 +111,13 @@ if uploaded_file:
     # Clean up temporary files after use
     # os.remove(temp_video_path)
     # os.remove(audio_file_path)
+
+    # Generate summary of transcription
+    input_ids = summarizer_tokenizer.encode(transcription, return_tensors="pt")
+    summary_ids = summarizer_model.generate(input_ids, max_length=150, num_beams=4, early_stopping=True)
+    
+    summary = summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    
+    # Display summary
+    st.subheader("Summary:")
+    st.write(summary)
