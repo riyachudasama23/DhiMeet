@@ -7,8 +7,19 @@ from moviepy.editor import VideoFileClip
 import tempfile
 
 from transformers import BartForConditionalGeneration, BartTokenizer
+from sentence_transformers import SentenceTransformer
+
+from sklearn.metrics.pairwise import cosine_similarity
 
 discussion_file = "discussion_points.txt"
+
+# Load the llm models
+model = whisper.load_model("base")
+
+summarizer_model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
+summarizer_tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
+
+sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Create a directory to store uploaded files
 if not os.path.exists("uploads"):
@@ -67,12 +78,30 @@ if discussion_points:
 if not discussion_points:
     st.write("No discussion points added yet.")
 
+#generate agenda
 
-# Load the llm models
-model = whisper.load_model("base")
+# Function to create an organized agenda from discussion points using LLM for grammar correction 
+def create_agenda(discussion_points):
+   agenda_items = []
+   for point in discussion_points:
+       prompt = f"Create a well-structured agenda item based on this discussion point: '{point}'"
+       inputs = summarizer_tokenizer(prompt, return_tensors="pt", max_length=1024, truncation=True)
+       summary_ids = summarizer_model.generate(inputs["input_ids"], max_length=150, num_beams=4, early_stopping=True)
+       agenda_item = summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+       agenda_items.append(agenda_item)
+   return agenda_items
 
-summarizer_model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
-summarizer_tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
+# Generate and display agenda based on discussion points when requested by user 
+st.title("Generate Meeting Agenda")
+
+if st.button("Generate Agenda"):
+   if discussion_points: 
+       agenda_items = create_agenda(discussion_points)
+       st.subheader("Meeting Agenda:")
+       for item in agenda_items:
+           st.markdown(f"- {item}")  # Use Markdown for bullet points 
+   else: 
+       st.write("No discussion points available to create an agenda.")
 
 # Function to extract audio from video
 def extract_audio_from_video(video_file_path):
@@ -86,11 +115,52 @@ def transcribe_audio(audio_file_path):
     result = model.transcribe(audio_file_path)
     return result["text"]
 
+# Function to generate detailed summary from transcription
+def generate_detailed_summary(transcription):
+    prompt = f"""
+    Summarize the following meeting transcription. Include:
+    - What was discussed
+    - Key decisions made during the meeting
+    - Assigned action items and responsible participants
+
+    Transcription: {transcription}
+    
+    Detailed Summary:
+    """
+    
+    inputs = summarizer_tokenizer(prompt, return_tensors="pt", max_length=1024, truncation=True)
+    summary_ids = summarizer_model.generate(inputs["input_ids"], max_length=300, num_beams=4, early_stopping=True)
+    
+    return summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+
+
 # Streamlit UI
 st.title("Video to Text Transcription")
 uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mkv", "avi"])
 
 st.write("Transcribing Meeting...")
+
+# Function to check if discussion points are covered in the transcription
+def check_discussion_points(discussion_points, transcription):
+    covered_points = []
+    uncovered_points = []
+    
+    for point in discussion_points:
+        # Check if the discussion point is present in the transcription
+        if point.lower() in transcription.lower():
+            covered_points.append(point)
+        else:
+            # Calculate semantic similarity
+            point_embedding = sentence_model.encode([point])
+            transcription_embedding = sentence_model.encode([transcription])
+            similarity = cosine_similarity(point_embedding, transcription_embedding)[0][0]
+            
+            if similarity > 0.7:  # Adjust the threshold as needed
+                covered_points.append(point)
+            else:
+                uncovered_points.append(point)
+    
+    return covered_points, uncovered_points
 
 if uploaded_file:
     # Save the uploaded video temporarily in a temp directory
@@ -108,16 +178,27 @@ if uploaded_file:
     st.subheader("Transcription:")
     st.write(transcription)
 
-    # Clean up temporary files after use
-    # os.remove(temp_video_path)
-    # os.remove(audio_file_path)
+    # Generate detailed summary of transcription
+    detailed_summary = generate_detailed_summary(transcription)
 
-    # Generate summary of transcription
-    input_ids = summarizer_tokenizer.encode(transcription, return_tensors="pt")
-    summary_ids = summarizer_model.generate(input_ids, max_length=150, num_beams=4, early_stopping=True)
+    # Display detailed summary
+    st.subheader("Detailed Summary:")
+    st.write(detailed_summary)
+
+    # Check discussion points coverage
+    covered_points, uncovered_points = check_discussion_points(discussion_points, transcription)
     
-    summary = summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    # Display results
+    st.subheader("Covered Discussion Points:")
+    if covered_points:
+        for point in covered_points:
+            st.markdown(f"- {point}")  # Use Markdown for bullet points
+    else:
+        st.write("No covered points.")
     
-    # Display summary
-    st.subheader("Summary:")
-    st.write(summary)
+    st.subheader("Uncovered Discussion Points:")
+    if uncovered_points:
+        for point in uncovered_points:
+            st.markdown(f"- {point}")  # Use Markdown for bullet points
+    else:
+        st.write("All points covered.")   
