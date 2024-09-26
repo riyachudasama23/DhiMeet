@@ -1,6 +1,5 @@
 import streamlit as st
-import os
-import openai
+import os 
 
 import whisper
 from moviepy.editor import VideoFileClip
@@ -10,6 +9,8 @@ from transformers import BartForConditionalGeneration, BartTokenizer
 from sentence_transformers import SentenceTransformer
 
 from sklearn.metrics.pairwise import cosine_similarity
+import faiss
+import numpy as np
 
 discussion_file = "discussion_points.txt"
 
@@ -78,7 +79,9 @@ if discussion_points:
 if not discussion_points:
     st.write("No discussion points added yet.")
 
-#generate agenda
+# Initialize FAISS index for RAG functionality 
+dimension = 384  # Dimension of sentence embeddings from MiniLM model.
+index_flat = faiss.IndexFlatL2(dimension)  # Create a flat (non-hierarchical) index.
 
 # Function to create an organized agenda from discussion points using LLM for grammar correction 
 def create_agenda(discussion_points):
@@ -201,4 +204,24 @@ if uploaded_file:
         for point in uncovered_points:
             st.markdown(f"- {point}")  # Use Markdown for bullet points
     else:
-        st.write("All points covered.")   
+        st.write("All points covered.")  
+
+# Add vectors of discussion points to FAISS index when new points are added.
+for point in discussion_points:
+   embedding = sentence_model.encode([point])
+   index_flat.add(np.array(embedding).astype('float32'))  # Ensure correct type.
+
+# Function to retrieve relevant discussion points using RAG approach.
+def retrieve_relevant_discussion(query):
+   query_embedding = sentence_model.encode([query])
+   D, I = index_flat.search(np.array(query_embedding).astype('float32'), k=5)  # Retrieve top 5 closest vectors.
+   return [discussion_points[i] for i in I[0]]
+
+# Example usage of retrieval function (you can call this based on user input).
+if st.button("Retrieve Relevant Discussion Points"):
+   user_query = st.text_input("Enter your query:")
+   if user_query:
+       relevant_discussions = retrieve_relevant_discussion(user_query)
+       st.subheader("Relevant Discussion Points:")
+       for item in relevant_discussions:
+           st.markdown(f"- {item}") 
